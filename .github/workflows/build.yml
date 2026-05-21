@@ -1,0 +1,67 @@
+name: Pure Unmodified PlatformIO Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:     
+      - name: Checkout Pristine Repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Setup Actions Cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio/.cache
+          key: ${{ runner.os }}-pio
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Install PlatformIO Core
+        run: pip install --upgrade platformio
+
+      - name: Set environment variables
+        run: echo "VERSION=$(head -1 version)" >> $GITHUB_ENV
+
+      - name: Run Author's Native Pre-Build Steps
+        run: |
+          # These are the original steps the author uses to link the commit hash and version
+          sed -i -e 's|*GLOBAL_HASH = "\(.*\)";|*GLOBAL_HASH = "'"$(git rev-parse --short HEAD)"'";|g' components/cmd_system/cmd_system.c  
+          sed -i -e 's/DEV-VERSION/${{ env.VERSION }}/g' CMakeLists.txt    
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install htmlmin esptool
+
+      - name: Minify HTML files
+        run: python .github/workflows/shrinkHTML.py
+        shell: sh
+
+      - name: Compile Pristine ESP32 Firmware
+        run: platformio run -e esp32
+
+      - name: Package Unmodified Factory Binaries
+        run: |
+          folder=.pio/build/esp32
+          chip=esp32
+          mkdir -p release
+          
+          mv $folder/firmware.bin $folder/${chip}nat_extended_v${{ env.VERSION }}.bin
+          
+          esptool.py --chip $chip merge_bin -o release/${chip}nat_extended_full_v${{ env.VERSION }}.bin --flash_freq keep --flash_size keep 0x1000 $folder/bootloader.bin 0x10000 $folder/${chip}nat_extended_v${{ env.VERSION }}.bin 0x8000 $folder/partitions.bin
+          zip -j release/${chip}nat_extended_full_v${{ env.VERSION }}.zip release/${chip}nat_extended_full_v${{ env.VERSION }}.bin
+
+      - name: Upload Clean Binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: Unmodified-Base-Firmware
+          path: release/*.zip
